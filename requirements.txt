@@ -1,7 +1,10 @@
-streamlit>=1.40.0
+streamlit>=1.63.0
 numpy>=1.26.0
+scipy>=1.11.0
 pandas>=2.1.0
 plotly>=5.20.0
 matplotlib>=3.8.0
 pillow>=10.0.0
 gTTS>=2.5.0
+requests>=2.31.0
+rdkit>=2024.3.1

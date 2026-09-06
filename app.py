@@ -15,6 +15,7 @@ facts, and a photo-overlay AR *preview*. See the Home page and README for
 what's real today versus roadmap.
 """
 
+import base64
 import io
 import random
 
@@ -22,17 +23,21 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 
 from chem_data import (
     ELEMENTS, CENTRAL_ALLOWED_N, PERIPHERAL_ELEMENTS, IONIC_METALS, IONIC_ANIONS,
     CURATED_MOLECULES, MOL_BY_FORMULA, GREEN_FACTS, SAFETY_COMBOS, VOCAB,
     EXACT_ANGLES, GEOMETRY_INFO, PALETTE_ORDER, COMPLEX_BY_FORMULA, ION_CHARGES,
 )
-from chem_engine import build_covalent, build_ionic, green_score, match_atoms
+from chem_engine import build_covalent, build_ionic, green_score, match_atoms, hill_formula
 from viz import (
     plotly_molecule_figure, matplotlib_sticker, composite_ar, molecule_card,
     lewis_dot_covalent, lewis_dot_ionic,
 )
+from live_ar import molecule_to_ar_html, hiro_marker_base64
+import pubchem_client
+from rdkit_engine import geometry_from_sdf
 
 st.set_page_config(page_title="BondVision AR", page_icon="🧪", layout="wide")
 
@@ -158,9 +163,17 @@ if page == "🏠 Home":
             "**Working today**\n\n"
             "- Tap-to-build atom workspace with automatic bond formation\n"
             "- 31-molecule curated library + 4 complex-organic fact cards\n"
-            "- Electron-level views: ionic transfer diagrams and Lewis dot structures\n"
+            "- **Real chemical lookup via PubChem + RDKit** — combinations the local "
+            "engine can't build (polyatomic ions like sulfate, real molecules like "
+            "aspirin) are looked up in a real 100M+ compound database and correctly "
+            "interpreted for bonding and electron structure (needs internet)\n"
+            "- Electron-level views: ionic transfer diagrams and Lewis dot structures, "
+            "now including real formal-charge/lone-pair chemistry for looked-up ions\n"
             "- Transparent, rule-based green-chemistry scoring\n"
-            "- Photo-overlay AR preview\n"
+            "- Photo-overlay AR preview (tested, reliable fallback)\n"
+            "- **Live marker-tracked AR** (real camera + real-time 3D, built on A-Frame/AR.js — "
+            "now also works on real PubChem-sourced structures, with an optional in-scene "
+            "floating label; shipped, but needs your own device test before a live demo)\n"
             "- Quiz with badges, session-scoped leaderboard\n"
             "- Lab safety advisor (real, well-known hazard pairs)\n"
             "- English + Hindi explanations, 4 more languages at vocabulary level"
@@ -170,10 +183,9 @@ if page == "🏠 Home":
             '<div class="roadmap"><b>Roadmap — needs infrastructure this prototype doesn\'t have</b><br><br>'
             "• Real drag-and-drop (mouse) — needs a custom browser component; "
             "tapping was chosen instead since it also works on touchscreens<br>"
-            "• Live ArUco marker-tracked AR — needs a native camera app or "
-            "streamlit-webrtc with a reliable TURN server, not just a browser tab<br>"
-            "• A trained graph neural network on EPA/PubChem toxicity data — "
-            "needs a real labelled dataset and training pipeline<br>"
+            "• Verified environmental/toxicity data for PubChem-looked-up compounds "
+            "beyond the 31+4 hand-curated ones — needs either a lot more careful manual "
+            "curation or a second data source (e.g. PubChem's separate GHS/safety endpoints)<br>"
             "• Multilingual LLM tutor (8 languages) — needs an LLM API key; "
             "not configured in this deployment<br>"
             "• Photo-to-solution homework helper — needs a vision-capable LLM"
@@ -277,17 +289,108 @@ elif page == "🧪 Atom Workspace":
         st.info("Tap some atoms above, or try one of the famous combinations, to see what forms.")
 
     elif result["kind"] == "no_match":
+        formula_str = hill_formula(st.session_state.basket)
         st.warning(
-            f"**No verified real structure for this exact combination** in BondVision AR's "
-            f"library — that's not the same as saying it can't exist, just that this tool won't "
-            f"guess at a structure it can't confirm. Total mass of what's in the workspace: "
-            f"**{result['total_mass']} g/mol**."
+            f"**No verified real structure for this exact combination in the local engine** — "
+            f"that's not the same as saying it can't exist, just that BondVision AR's own AXₙ "
+            f"model won't guess at a structure it can't confirm. Total mass of what's in the "
+            f"workspace: **{result['total_mass']} g/mol**."
         )
         st.caption(
-            "Try adjusting the counts — for a covalent molecule, one element usually needs to be "
-            "at a count of exactly 1 (the central atom); for an ionic compound, the ratio needs to "
-            "exactly charge-balance (e.g. 1 Mg to 2 Cl, not 1 to 1)."
+            "For a *local* covalent molecule, one element usually needs to be at a count of "
+            "exactly 1 (the central atom); for a *local* ionic compound, the ratio needs to "
+            "exactly charge-balance. But real chemistry is bigger than that — try the real "
+            "lookup below."
         )
+
+        st.markdown("---")
+        st.markdown(f"### 🔍 Look up **{formula_str}** on PubChem (needs internet)")
+        st.caption(
+            "PubChem is the U.S. National Institutes of Health's free public chemistry database — "
+            "100+ million real compounds. This calls their live API, so it needs an internet "
+            "connection and won't work if the classroom's connection is down; that's the one part "
+            "of BondVision AR that needs internet."
+        )
+
+        if st.button("🌐 Search PubChem for this formula", type="primary"):
+            with st.spinner(f"Searching PubChem for {formula_str}…"):
+                try:
+                    candidates = pubchem_client.lookup_formula_with_names(formula_str, max_results=6)
+                    st.session_state.pubchem_candidates = candidates
+                    st.session_state.pubchem_error = None
+                except pubchem_client.PubChemNotFound:
+                    st.session_state.pubchem_candidates = []
+                    st.session_state.pubchem_error = (
+                        f"PubChem has no record matching the exact formula {formula_str}. "
+                        f"This can be genuinely correct — not every element combination forms "
+                        f"a real, stable compound."
+                    )
+                except pubchem_client.PubChemError as e:
+                    st.session_state.pubchem_candidates = []
+                    st.session_state.pubchem_error = str(e)
+
+        if st.session_state.get("pubchem_error"):
+            st.error(st.session_state.pubchem_error)
+
+        candidates = st.session_state.get("pubchem_candidates") or []
+        if candidates:
+            if len(candidates) > 1:
+                st.info(
+                    f"**{len(candidates)} real compounds share this exact formula** — this is "
+                    f"genuinely common (different hydration states, isomers, or charge states "
+                    f"are all distinct real compounds). Pick which one:"
+                )
+            labels = [f"{c['name']} (CID {c['cid']}, {c['mass']} g/mol)" for c in candidates]
+            pick_idx = st.radio("Real PubChem matches", range(len(candidates)),
+                                 format_func=lambda i: labels[i], label_visibility="collapsed")
+            chosen = candidates[pick_idx]
+
+            if st.button(f"📥 Load 3D structure for {chosen['name']}"):
+                with st.spinner("Fetching real 3D structure from PubChem…"):
+                    try:
+                        sdf = pubchem_client.get_sdf_3d(chosen["cid"])
+                        geo = geometry_from_sdf(sdf, formula=chosen["formula"], name=chosen["name"])
+                        st.session_state.pubchem_geo = geo
+                        st.session_state.pubchem_geo_label = chosen["name"]
+                        set_current(geo, chosen["name"])
+                    except Exception as e:
+                        st.error(f"Could not load or parse the 3D structure: {e}")
+
+        if st.session_state.get("pubchem_geo") is not None:
+            geo = st.session_state.pubchem_geo
+            label = st.session_state.pubchem_geo_label
+            st.success(f"**{label}** — loaded from a real PubChem 3D structure, interpreted by RDKit")
+            for note in geo.notes:
+                st.info(note)
+
+            tab3d, tab_electrons = st.tabs(["3D shape (from PubChem)", "⚡ Electrons & bonding (via RDKit)"])
+            with tab3d:
+                colL, colR = st.columns([3, 2])
+                with colL:
+                    st.plotly_chart(plotly_molecule_figure(geo), width='stretch')
+                with colR:
+                    st.markdown(f"### {geo.formula}")
+                    st.metric("Net charge", f"{geo.meta['net_charge']:+d}" if geo.meta["net_charge"] else "0 (neutral)")
+                    st.metric("Molar mass", f"{geo.molar_mass} g/mol")
+                    st.caption("3D coordinates are PubChem's computed conformer, not an experimental "
+                               "measurement — PubChem is explicit about this distinction too.")
+            with tab_electrons:
+                fig = lewis_dot_covalent(geo)
+                st.pyplot(fig)
+                plt.close(fig)
+                st.caption("Bond orders and formal charges computed by RDKit from the real PubChem "
+                           "structure — not this app's own simplified AXₙ model.")
+
+            gscore = green_score(geo.formula)
+            st.markdown(
+                f'<div class="grade-box {grade_css(gscore["grade"])}"><h3>🌱 {gscore["grade"]}</h3>'
+                f'<p>{gscore["note"]}</p></div>', unsafe_allow_html=True)
+            if not gscore["verified"]:
+                st.caption("⚠️ " + gscore["note"] + " (This compound isn't in BondVision AR's "
+                           "hand-curated environmental facts table, so this is a structural estimate only.)")
+
+            st.info("💡 Head to the **AR Preview** page and choose \"Use my last lookup\" to view "
+                    "this real structure in AR.")
 
     elif result["kind"] == "complex":
         m = result["molecule"]
@@ -470,47 +573,107 @@ elif page == "🌱 Green Chemistry Compare":
 # AR PREVIEW
 # =============================================================================
 elif page == "🥽 AR Preview":
-    st.markdown("## 🥽 AR Concept Preview")
-    st.warning(
-        "**What this actually does, in plain terms:** this takes one still photo from your "
-        "camera and pastes a rendered picture of the molecule on top of it, at a position you "
-        "control with sliders. It does **not** track a printed marker or follow the camera in "
-        "real time — a browser tab can only grab a single photo, not a live video feed for "
-        "Python to process frame by frame. Real marker-tracked AR (detecting a printed card and "
-        "locking the molecule to it as you move the phone) needs a native camera app, which is "
-        "listed as roadmap on the Home page."
+    st.markdown("## 🥽 AR Preview")
+
+    source = st.radio(
+        "Molecule source",
+        ["📚 Molecule Library (31 curated shapes)",
+         "🔍 My last PubChem lookup" + ("" if st.session_state.get("pubchem_geo") else " (nothing looked up yet)")],
+        horizontal=False,
     )
 
-    formulas = [m["formula"] for m in CURATED_MOLECULES]
-    pick = st.selectbox("Molecule to preview", formulas,
-                         format_func=lambda f: f"{f} — {MOL_BY_FORMULA[f]['name']}")
-    m = MOL_BY_FORMULA[pick]
-    if m.get("is_ionic"):
-        st.info("Ionic lattices don't have a single discrete 3D shape to preview — pick a covalent molecule instead.")
-    else:
-        kwargs = dict(central=m["central"], peripheral=m["peripheral"], n=m["n"],
-                      bond_order=m["bond_order"], formula=m["formula"])
-        if "steric_override" in m:
-            kwargs["steric_override"] = m["steric_override"]; kwargs["lone_pairs_override"] = m["lone_pairs_override"]
-        if m["formula"] in EXACT_ANGLES:
-            kwargs["exact_angle"] = EXACT_ANGLES[m["formula"]]
-        geo = build_covalent(**kwargs)
-
-        photo = st.camera_input("Point the camera at your desk and take a photo")
-        c1, c2, c3 = st.columns(3)
-        scale = c1.slider("Size", 0.15, 0.8, 0.4)
-        x_frac = c2.slider("Left ↔ Right", 0.0, 1.0, 0.5)
-        y_frac = c3.slider("Up ↔ Down", 0.0, 1.0, 0.5)
-
-        if photo is not None:
-            sticker = matplotlib_sticker(geo)
-            result = composite_ar(photo.getvalue(), sticker, scale=scale, x_frac=x_frac, y_frac=y_frac)
-            st.image(result, caption=f"{pick} — {m['name']}", width='stretch')
-            buf = io.BytesIO(); result.save(buf, format="PNG")
-            st.download_button("⬇️ Download this image", buf.getvalue(),
-                                file_name=f"{pick}_ar_preview.png", mime="image/png")
+    geo = None
+    label = None
+    if source.startswith("📚"):
+        formulas = [m["formula"] for m in CURATED_MOLECULES]
+        pick = st.selectbox("Molecule to preview", formulas,
+                             format_func=lambda f: f"{f} — {MOL_BY_FORMULA[f]['name']}")
+        m = MOL_BY_FORMULA[pick]
+        if m.get("is_ionic"):
+            st.info("Ionic lattices don't have a single discrete 3D shape to preview — pick a covalent molecule instead.")
         else:
-            st.info("Take a photo above to see the molecule composited onto it.")
+            kwargs = dict(central=m["central"], peripheral=m["peripheral"], n=m["n"],
+                          bond_order=m["bond_order"], formula=m["formula"])
+            if "steric_override" in m:
+                kwargs["steric_override"] = m["steric_override"]; kwargs["lone_pairs_override"] = m["lone_pairs_override"]
+            if m["formula"] in EXACT_ANGLES:
+                kwargs["exact_angle"] = EXACT_ANGLES[m["formula"]]
+            geo = build_covalent(**kwargs)
+            label = pick
+    else:
+        if st.session_state.get("pubchem_geo") is None:
+            st.info("Nothing looked up yet — go to the **Atom Workspace**, tap a combination with no "
+                    "local match, and use the PubChem lookup there first.")
+        else:
+            geo = st.session_state.pubchem_geo
+            label = st.session_state.pubchem_geo_label
+            st.success(f"Using **{label}** ({geo.formula}) — a real structure from PubChem, interpreted by RDKit. "
+                       f"This is new: AR now works for real molecules the local engine can't build on its own, "
+                       f"like polyatomic ions.")
+
+    if geo is not None:
+        ar_mode = st.radio(
+            "AR mode",
+            ["📸 Photo Overlay (tested, works everywhere)",
+             "🎥 Live Marker AR (real-time, experimental — test on your own device first)"],
+            horizontal=False,
+        )
+
+        if ar_mode.startswith("📸"):
+            st.warning(
+                "**What this does, in plain terms:** takes one still photo and pastes a rendered "
+                "picture of the molecule on top of it, at a position you control with sliders. It "
+                "does not track anything or update live — this is the reliable fallback, tested "
+                "and known to work in every browser."
+            )
+            photo = st.camera_input("Point the camera at your desk and take a photo")
+            c1, c2, c3 = st.columns(3)
+            scale = c1.slider("Size", 0.15, 0.8, 0.4)
+            x_frac = c2.slider("Left ↔ Right", 0.0, 1.0, 0.5)
+            y_frac = c3.slider("Up ↔ Down", 0.0, 1.0, 0.5)
+
+            if photo is not None:
+                sticker = matplotlib_sticker(geo)
+                result = composite_ar(photo.getvalue(), sticker, scale=scale, x_frac=x_frac, y_frac=y_frac)
+                st.image(result, caption=f"{label}", width='stretch')
+                buf = io.BytesIO(); result.save(buf, format="PNG")
+                st.download_button("⬇️ Download this image", buf.getvalue(),
+                                    file_name=f"{label}_ar_preview.png", mime="image/png")
+            else:
+                st.info("Take a photo above to see the molecule composited onto it.")
+
+        else:
+            st.error(
+                "**This is real, live, marker-tracked AR** — a genuine camera feed with the "
+                "molecule locked to a printed marker in real time, built on A-Frame + AR.js. "
+                "It has been checked as far as possible without an actual browser: the real "
+                "npm packages were downloaded and inspected, Streamlit's own compiled source "
+                "was read to confirm its iframe grants camera permission, and the geometry math "
+                "was verified against known cases. **What hasn't been tested is a real phone "
+                "camera pointed at a real printed marker under real lighting — please try it "
+                "yourself before showing it to a judge.**"
+            )
+            st.markdown("**Step 1 — print the marker** (this is the real, official AR.js Hiro marker):")
+            marker_bytes = base64.b64decode(hiro_marker_base64())
+            dl1, dl2 = st.columns([1, 3])
+            dl1.download_button("⬇️ Download marker to print", marker_bytes,
+                                 file_name="hiro_marker.png", mime="image/png")
+            dl2.caption("Print at a decent size (at least 5-6 cm across) on plain paper, on a flat surface, "
+                        "in good even lighting.")
+
+            ar_scale = st.slider("Molecule size on the marker", 0.05, 0.6, 0.22, step=0.01)
+            show_label = st.checkbox("Show a floating label in the AR scene itself (new)", value=True)
+            label_text = None
+            if show_label:
+                gscore = green_score(geo.formula)
+                label_text = f"{geo.formula} - {gscore['grade'].split(' — ')[0]}"
+
+            st.markdown("**Step 2 — allow camera access below, then point it at the printed marker:**")
+            ar_html = molecule_to_ar_html(geo, scale=ar_scale, label_text=label_text)
+            try:
+                st.iframe(ar_html, height=480)
+            except AttributeError:
+                components.html(ar_html, height=480, scrolling=False)
 
 # =============================================================================
 # QUIZ & BADGES

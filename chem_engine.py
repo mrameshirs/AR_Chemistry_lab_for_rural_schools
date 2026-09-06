@@ -465,3 +465,20 @@ def match_atoms(atom_counts):
 
     total_mass = round(sum(ELEMENTS[e]["mass"] * n for e, n in counts.items()), 2)
     return {"kind": "no_match", "counts": counts, "total_mass": total_mass}
+
+
+def hill_formula(counts):
+    """
+    Standard Hill notation: Carbon first (if present), then Hydrogen, then
+    every other element alphabetically — the convention chemical databases
+    (including PubChem's formula search) expect. Counts of 1 are omitted.
+    """
+    counts = {k: v for k, v in counts.items() if v > 0}
+    order = []
+    if "C" in counts:
+        order.append("C")
+        if "H" in counts:
+            order.append("H")
+    remaining = sorted(e for e in counts if e not in order)
+    order += remaining
+    return "".join(f"{e}{counts[e] if counts[e] != 1 else ''}" for e in order)
