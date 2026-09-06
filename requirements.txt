@@ -1,0 +1,7 @@
+streamlit>=1.40.0
+numpy>=1.26.0
+pandas>=2.1.0
+plotly>=5.20.0
+matplotlib>=3.8.0
+pillow>=10.0.0
+gTTS>=2.5.0
