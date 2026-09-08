@@ -63,12 +63,35 @@ def cylinder_rotation_deg(direction):
 
 
 def hiro_marker_base64():
-    """The REAL Hiro marker image (downloaded from the AR.js project itself,
+    """
+    The REAL Hiro marker image (downloaded from the AR.js project itself,
     not redrawn), so it can be embedded as a downloadable/printable asset
     without depending on the student's classroom having internet access
-    at print time."""
-    with open(_HIRO_PATH, "rb") as f:
-        return base64.b64encode(f.read()).decode("ascii")
+    at print time.
+
+    Falls back to fetching it live from AR.js's own GitHub repository if
+    the local bundled copy is missing — this happens in practice when a
+    deployment doesn't include every file (binary files like this PNG are
+    the easiest thing to accidentally leave out of a partial git push).
+    Returns None (rather than raising) if neither source works, so a
+    deployment problem degrades this one feature instead of crashing the
+    whole page.
+    """
+    try:
+        with open(_HIRO_PATH, "rb") as f:
+            return base64.b64encode(f.read()).decode("ascii")
+    except FileNotFoundError:
+        pass
+    try:
+        import requests
+        r = requests.get(
+            "https://raw.githubusercontent.com/AR-js-org/AR.js/master/data/images/hiro.png",
+            timeout=10,
+        )
+        r.raise_for_status()
+        return base64.b64encode(r.content).decode("ascii")
+    except Exception:
+        return None
 
 
 def molecule_to_ar_html(geo, scale=0.22, bond_radius=0.045, label_text=None):

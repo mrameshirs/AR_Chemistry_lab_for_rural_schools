@@ -653,12 +653,22 @@ elif page == "🥽 AR Preview":
                 "yourself before showing it to a judge.**"
             )
             st.markdown("**Step 1 — print the marker** (this is the real, official AR.js Hiro marker):")
-            marker_bytes = base64.b64decode(hiro_marker_base64())
-            dl1, dl2 = st.columns([1, 3])
-            dl1.download_button("⬇️ Download marker to print", marker_bytes,
-                                 file_name="hiro_marker.png", mime="image/png")
-            dl2.caption("Print at a decent size (at least 5-6 cm across) on plain paper, on a flat surface, "
-                        "in good even lighting.")
+            marker_b64 = hiro_marker_base64()
+            if marker_b64 is None:
+                st.error(
+                    "Could not load the marker image — neither the bundled copy nor a live "
+                    "fetch worked. If you're seeing this on a deployed app, the `assets/` "
+                    "folder likely didn't make it into the deployment. You can also print "
+                    "the marker directly from AR.js's own repository: "
+                    "https://raw.githubusercontent.com/AR-js-org/AR.js/master/data/images/hiro.png"
+                )
+            else:
+                marker_bytes = base64.b64decode(marker_b64)
+                dl1, dl2 = st.columns([1, 3])
+                dl1.download_button("⬇️ Download marker to print", marker_bytes,
+                                     file_name="hiro_marker.png", mime="image/png")
+                dl2.caption("Print at a decent size (at least 5-6 cm across) on plain paper, on a flat surface, "
+                            "in good even lighting.")
 
             ar_scale = st.slider("Molecule size on the marker", 0.05, 0.6, 0.22, step=0.01)
             show_label = st.checkbox("Show a floating label in the AR scene itself (new)", value=True)
