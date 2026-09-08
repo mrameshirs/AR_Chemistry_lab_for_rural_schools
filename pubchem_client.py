@@ -147,9 +147,45 @@ def get_sdf_3d(cid):
     positions and bond orders for a computationally-generated 3D conformer
     (PubChem is explicit that this is computed, not experimentally
     measured — worth saying plainly to a student, not just to me).
+
+    NOTE: not every PubChem compound has a precomputed 3D conformer —
+    this is a real, documented PubChem behaviour (confirmed against a
+    real user report of the exact same symptom before assuming it was a
+    bug in this client). Simple ionic salts are disproportionately likely
+    to be missing one, since 3D conformer generation applies most reliably
+    to single connected covalent structures. Raises PubChemNotFound if
+    there's genuinely no 3D record — callers should fall back to
+    get_sdf_2d() + local conformer generation, which is exactly what
+    rdkit_engine.geometry_from_cid() below does.
     """
     url = f"{PUG}/compound/cid/{cid}/record/SDF?record_type=3d"
     return _get(url, parse_json=False)
+
+
+def get_sdf_2d(cid):
+    """
+    The default (no record_type parameter) SDF endpoint. Far more
+    universally available than the 3D one — 2D layout is computed for
+    essentially every compound in PubChem, including simple salts that
+    lack a stored 3D conformer.
+    """
+    url = f"{PUG}/compound/cid/{cid}/record/SDF"
+    return _get(url, parse_json=False)
+
+
+def get_sdf_best_effort(cid):
+    """
+    Try the real PubChem 3D conformer first; if PubChem doesn't have one
+    for this compound (a real, common case, not an error), fall back to
+    its 2D structure. Returns (sdf_text, is_3d) so the caller can be
+    honest with the user about which one they got — and, if it's 2D,
+    that a 3D conformer needs to be generated locally rather than
+    silently presenting flattened 2D coordinates as if they were real 3D.
+    """
+    try:
+        return get_sdf_3d(cid), True
+    except PubChemNotFound:
+        return get_sdf_2d(cid), False
 
 
 def lookup_formula_with_names(formula, max_results=6):

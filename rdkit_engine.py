@@ -173,6 +173,62 @@ def molecule_geometry_from_mol(mol, formula, name=None, bond_length_scale=1.0):
     )
 
 
-def geometry_from_sdf(sdf_text, formula, name=None):
+def geometry_from_sdf(sdf_text, formula, name=None, is_3d=True):
+    """
+    is_3d=False means this SDF came from PubChem's 2D fallback (no
+    precomputed 3D conformer available for this compound — see
+    pubchem_client.get_sdf_best_effort). In that case a real 3D conformer
+    is generated locally with RDKit's standard ETKDG algorithm — the same
+    well-established method used to build this module's own test
+    fixtures — rather than silently rendering flattened 2D coordinates as
+    if they were genuine 3D positions.
+    """
     mol = mol_from_sdf(sdf_text)
-    return molecule_geometry_from_mol(mol, formula, name=name)
+    generated_3d = False
+    if not is_3d:
+        mol = Chem.AddHs(mol)
+        result = AllChem.EmbedMolecule(mol, randomSeed=42, useRandomCoords=True)
+        if result != 0:
+            # ETKDG can fail on unusual structures (e.g. some disconnected
+            # ionic fragments) -- try a simpler fallback rather than crash
+            result = AllChem.EmbedMolecule(mol, randomSeed=42, useRandomCoords=True,
+                                            useBasicKnowledge=False, enforceChirality=False)
+        if result == 0:
+            generated_3d = True
+        else:
+            AllChem.Compute2DCoords(mol)  # last resort: flat layout, honestly labelled below
+
+    geo = molecule_geometry_from_mol(mol, formula, name=name)
+
+    n_fragments = len(Chem.GetMolFrags(mol))
+    extra_notes = []
+    if not is_3d:
+        if generated_3d:
+            extra_notes.append(
+                "PubChem doesn't have a precomputed 3D structure for this compound — this is "
+                "common for simple ionic salts. A 3D conformer was generated locally using "
+                "RDKit's standard ETKDG algorithm instead of PubChem's own data."
+            )
+        else:
+            extra_notes.append(
+                "Neither PubChem nor local 3D generation could produce real 3D coordinates for "
+                "this structure — showing a flat 2D layout instead. Bond orders and formal "
+                "charges are still real; only the 3D positions are a placeholder."
+            )
+    if n_fragments > 1:
+        extra_notes.append(
+            f"This structure has {n_fragments} disconnected pieces (separate ions) — like this "
+            f"app's own local ionic builder, the relative 3D arrangement shown between them is a "
+            f"schematic placement, not a real crystal lattice."
+        )
+    geo.notes = geo.notes + extra_notes
+    return geo
+
+
+def geometry_from_pubchem(cid, formula, name=None):
+    """Convenience wrapper used by the app: fetches the best available
+    structure from PubChem and turns it into a MoleculeGeometry, handling
+    the 3D/2D-fallback distinction honestly (see geometry_from_sdf)."""
+    import pubchem_client
+    sdf, is_3d = pubchem_client.get_sdf_best_effort(cid)
+    return geometry_from_sdf(sdf, formula=formula, name=name, is_3d=is_3d)

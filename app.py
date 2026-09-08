@@ -37,7 +37,7 @@ from viz import (
 )
 from live_ar import molecule_to_ar_html, hiro_marker_base64
 import pubchem_client
-from rdkit_engine import geometry_from_sdf
+from rdkit_engine import geometry_from_sdf, geometry_from_pubchem
 
 st.set_page_config(page_title="BondVision AR", page_icon="🧪", layout="wide")
 
@@ -345,16 +345,15 @@ elif page == "🧪 Atom Workspace":
                                  format_func=lambda i: labels[i], label_visibility="collapsed")
             chosen = candidates[pick_idx]
 
-            if st.button(f"📥 Load 3D structure for {chosen['name']}"):
-                with st.spinner("Fetching real 3D structure from PubChem…"):
+            if st.button(f"📥 Load structure for {chosen['name']}"):
+                with st.spinner("Fetching structure from PubChem…"):
                     try:
-                        sdf = pubchem_client.get_sdf_3d(chosen["cid"])
-                        geo = geometry_from_sdf(sdf, formula=chosen["formula"], name=chosen["name"])
+                        geo = geometry_from_pubchem(chosen["cid"], formula=chosen["formula"], name=chosen["name"])
                         st.session_state.pubchem_geo = geo
                         st.session_state.pubchem_geo_label = chosen["name"]
                         set_current(geo, chosen["name"])
                     except Exception as e:
-                        st.error(f"Could not load or parse the 3D structure: {e}")
+                        st.error(f"Could not load or parse the structure: {e}")
 
         if st.session_state.get("pubchem_geo") is not None:
             geo = st.session_state.pubchem_geo

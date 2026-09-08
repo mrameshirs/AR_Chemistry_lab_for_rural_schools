@@ -144,6 +144,18 @@ discarded instead of followed up on. Fixed by polling
 PubChem's own documented async example (their similarity-search tutorial)
 before shipping, and tested against the exact real failure case.
 
+**A second real limitation, also worth documenting:** not every PubChem
+compound has a precomputed 3D conformer — this is genuine, confirmed
+PubChem behaviour, not a bug in this client (a PubChemPy user reported the
+identical symptom independently: a compound's basic record exists, but its
+3D-specific record doesn't). Simple ionic salts are disproportionately
+affected, since 3D conformer generation applies most reliably to single
+connected covalent structures, not multi-ion salts. Rather than error out,
+the app now falls back to PubChem's far more universal 2D structure and
+generates a real 3D conformer locally with RDKit's standard ETKDG
+algorithm — and says so plainly in the app rather than presenting a
+locally-guessed structure as if it were PubChem's own data.
+
 **What this can't reliably do:** disambiguate between real distinct
 compounds sharing a common name (searching "magnesium sulfate" actually
 returns at least 8 different real PubChem records — anhydrous, mono- through
