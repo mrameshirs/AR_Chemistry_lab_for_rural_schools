@@ -58,17 +58,49 @@ class PubChemNotFound(PubChemError):
     pass
 
 
+def _resolve_cids(data, url_for_polling_base, max_attempts=15, poll_interval=2.0):
+    """
+    Some PUG-REST searches (formula search, similarity search — anything
+    requiring a scan across PubChem's ~110M compounds rather than a direct
+    lookup) don't return results immediately. Instead of {"IdentifierList":
+    {"CID": [...]}}, the first response is {"Waiting": {"ListKey": "..."}},
+    and the real result has to be polled from a separate endpoint until it's
+    ready. This was missed in the first version of this client, which is
+    exactly why a real compound (e.g. forsterite/Mg2SiO4, a very common
+    mineral) could come back as a false "not found" — the job key was
+    silently discarded rather than followed up on. Confirmed against
+    PubChem's own documented example (async similarity search) before this
+    fix, not guessed.
+    """
+    if "IdentifierList" in data:
+        return data["IdentifierList"]["CID"]
+
+    list_key = data.get("Waiting", {}).get("ListKey")
+    if not list_key:
+        return []
+
+    poll_url = f"{PUG}/compound/listkey/{list_key}/cids/JSON"
+    for _ in range(max_attempts):
+        time.sleep(poll_interval)
+        polled = _get(poll_url)
+        if "IdentifierList" in polled:
+            return polled["IdentifierList"]["CID"]
+        if "Waiting" not in polled:
+            break  # unexpected shape; stop polling rather than loop forever
+    return []
+
+
 def search_by_formula(formula, max_results=8):
     """
     Look up candidate compounds by molecular formula.
     Confirmed real endpoint pattern (PubChem PUG-REST docs):
         {PUG}/compound/formula/{formula}/cids/JSON?MaxRecords=N
-    Returns a list of CIDs (may be many for a common formula — the caller
-    is expected to show names and let the person pick).
+    This search is asynchronous (see _resolve_cids above) — the first
+    response is a job key, not the answer.
     """
     url = f"{PUG}/compound/formula/{formula}/cids/JSON?MaxRecords={max_results}"
     data = _get(url)
-    cids = data.get("IdentifierList", {}).get("CID", [])
+    cids = _resolve_cids(data, url)
     if not cids:
         raise PubChemNotFound(f"No compound found with formula {formula}.")
     return cids[:max_results]
@@ -78,10 +110,14 @@ def search_by_name(name):
     """
     Confirmed real endpoint pattern, matches the worked aspirin example:
         {PUG}/compound/name/{name}/cids/JSON
+    Name search is documented as an immediate lookup (unlike formula
+    search), but this still goes through _resolve_cids defensively — no
+    cost to it, and it means a future PubChem change to this endpoint's
+    behaviour wouldn't silently reintroduce the same bug.
     """
     url = f"{PUG}/compound/name/{requests.utils.quote(name)}/cids/JSON"
     data = _get(url)
-    cids = data.get("IdentifierList", {}).get("CID", [])
+    cids = _resolve_cids(data, url)
     if not cids:
         raise PubChemNotFound(f"No compound found with name '{name}'.")
     return cids

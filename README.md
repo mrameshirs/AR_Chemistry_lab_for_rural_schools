@@ -132,6 +132,18 @@ here would be a completely different, open-ended feature — an actual chat
 tutor answering unpredictable student questions — not deciding how many
 electrons sit on an oxygen atom.
 
+**A real bug this surfaced, worth documenting rather than quietly fixing:**
+formula search on PubChem is asynchronous — a search across their ~110
+million compounds doesn't return an answer immediately, it returns a job
+key that has to be polled. The first version of this client only handled
+the immediate-response shape, so a real, extremely common compound
+(forsterite, Mg₂SiO₄ — one of the most abundant minerals in Earth's mantle)
+came back as a false "no record found," because the job key was silently
+discarded instead of followed up on. Fixed by polling
+`compound/listkey/{key}/cids/JSON` until the job resolves, verified against
+PubChem's own documented async example (their similarity-search tutorial)
+before shipping, and tested against the exact real failure case.
+
 **What this can't reliably do:** disambiguate between real distinct
 compounds sharing a common name (searching "magnesium sulfate" actually
 returns at least 8 different real PubChem records — anhydrous, mono- through
